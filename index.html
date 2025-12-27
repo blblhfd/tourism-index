@@ -1,0 +1,814 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>全球态势感知 - BDCSG AI Edition</title>
+    <style>
+        body { margin: 0; overflow: hidden; background-color: #000; font-family: 'Segoe UI', 'Microsoft YaHei', sans-serif; }
+        
+        /* Vue App 容器 */
+        #app { position: absolute; width: 100%; height: 100%; pointer-events: none; }
+
+        /* Canvas 容器 */
+        #canvas-container { position: absolute; top: 0; left: 0; width: 100%; height: 100%; z-index: 1; pointer-events: auto; }
+
+        /* UI 层 (Vue 控制) */
+        #ui-layer {
+            position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+            pointer-events: none; display: flex; flex-direction: column; justify-content: space-between;
+            z-index: 10;
+        }
+
+        header { padding: 20px; pointer-events: auto; background: linear-gradient(to bottom, rgba(0,0,0,0.9), transparent); }
+        h1 { margin: 0; font-weight: 300; letter-spacing: 4px; font-size: 28px; background: linear-gradient(90deg, #fff, #00ffff); -webkit-background-clip: text; -webkit-text-fill-color: transparent; text-shadow: 0 0 20px rgba(0,255,255,0.3); }
+        .subtitle { font-size: 12px; color: #00ffff; text-transform: uppercase; letter-spacing: 2px; }
+
+        /* 预览面板 */
+        .preview-panel {
+            position: absolute; top: 25%; right: 20px; width: 280px;
+            background: rgba(4, 8, 12, 0.9); border: 1px solid rgba(0, 255, 255, 0.4);
+            border-radius: 4px; padding: 20px; color: white;
+            transform: translateX(120%); transition: transform 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+            backdrop-filter: blur(10px); pointer-events: auto;
+            box-shadow: 0 0 20px rgba(0, 255, 255, 0.15);
+        }
+        .preview-panel.active { transform: translateX(0); }
+
+        /* 详情面板 */
+        .detail-panel {
+            position: absolute; top: 0; right: 0; 
+            width: 80%; height: 100%;
+            background: linear-gradient(to left, rgba(4, 8, 12, 1) 15%, rgba(10, 20, 30, 0.98) 100%);
+            border-left: 2px solid rgba(0, 255, 255, 0.3);
+            transform: translateX(100%); transition: transform 0.6s cubic-bezier(0.23, 1, 0.32, 1);
+            padding: 30px 50px; box-sizing: border-box; pointer-events: auto;
+            display: flex; flex-direction: column; 
+            backdrop-filter: blur(30px); box-shadow: -50px 0 100px rgba(0,0,0,1);
+            overflow: hidden;
+        }
+        .detail-panel.active { transform: translateX(0); }
+
+        .detail-header { 
+            display: flex; justify-content: space-between; align-items: flex-start; 
+            margin-bottom: 10px; padding-bottom: 10px; border-bottom: 1px solid rgba(0, 255, 255, 0.3); 
+            flex-shrink: 0; 
+        }
+        .country-title { font-size: 56px; color: #fff; text-shadow: 0 0 20px rgba(0, 255, 255, 0.5); margin: -10px 0 5px 0; line-height: 1; }
+        .country-meta { font-size: 14px; color: #00aaaa; letter-spacing: 1px; font-family: 'Consolas', monospace; }
+        
+        .content-layout { display: flex; flex: 1; gap: 40px; overflow: hidden; margin-bottom: 10px; }
+        .map-section { flex: 3; display: flex; flex-direction: column; position: relative; }
+        .stats-section { flex: 2; overflow-y: auto; padding-right: 10px; display: flex; flex-direction: column; gap: 15px; }
+
+        /* D3 Map */
+        #d3-map-wrapper {
+            flex: 1; background: rgba(0,0,0,0.4); border: 1px solid rgba(255,255,255,0.1);
+            border-radius: 8px; position: relative; overflow: hidden;
+        }
+        .map-controls {
+            position: absolute; top: 10px; left: 10px; z-index: 10;
+            display: flex; flex-wrap: wrap; gap: 8px; background: rgba(0,0,0,0.6); padding: 8px; border-radius: 4px; max-width: 90%;
+        }
+        .map-btn {
+            background: transparent; border: 1px solid #444; color: #aaa;
+            padding: 4px 8px; font-size: 11px; cursor: pointer; transition: 0.3s;
+        }
+        .map-btn:hover, .map-btn.active { background: #00aaaa; color: #000; border-color: #00ffff; box-shadow: 0 0 8px rgba(0,255,255,0.4); }
+        
+        .map-tooltip {
+            position: absolute; bottom: 10px; right: 10px; pointer-events: none;
+            background: rgba(0,0,0,0.9); border: 1px solid #00ffff; color: #fff;
+            padding: 8px; font-size: 12px; border-radius: 4px; z-index: 20;
+        }
+
+        /* Vue List Transition */
+        .list-enter-active, .list-leave-active { transition: all 0.5s ease; }
+        .list-enter-from, .list-leave-to { opacity: 0; transform: translateX(30px); }
+
+        /* Metric Card */
+        .metric-card {
+            background: rgba(0, 20, 40, 0.5); border: 1px solid rgba(255, 255, 255, 0.1);
+            padding: 12px 15px; border-radius: 4px; transition: 0.3s; position: relative;
+        }
+        .metric-card:hover { background: rgba(0, 30, 60, 0.8); border-color: rgba(0, 255, 255, 0.5); }
+        
+        .metric-header { display: flex; justify-content: space-between; margin-bottom: 5px; }
+        .metric-label { color: #ccc; font-size: 12px; text-transform: uppercase; }
+        .metric-value { color: #fff; font-size: 18px; font-weight: bold; font-family: 'Consolas', monospace; }
+        
+        .bar-bg { width: 100%; height: 6px; background: rgba(255, 255, 255, 0.1); border-radius: 3px; overflow: hidden; margin-bottom: 5px; }
+        .bar-fill { height: 100%; transition: width 1s cubic-bezier(0.22, 1, 0.36, 1); }
+        
+        .rank-text { font-size: 12px; color: #888; text-align: right; font-style: italic; }
+        .rank-highlight { color: #fff; font-weight: bold; }
+
+        /* AI Section Styles */
+        .ai-section {
+            margin-top: 10px; border-top: 1px solid rgba(255, 51, 0, 0.3);
+            padding-top: 15px; display: flex; flex-direction: column; gap: 10px;
+        }
+        .ai-btn {
+            background: rgba(40, 0, 0, 0.6); border: 1px solid #ff3300; color: #ff3300;
+            padding: 12px; cursor: pointer; font-family: 'Consolas', monospace; text-transform: uppercase;
+            letter-spacing: 1px; transition: 0.3s; width: 100%; display: flex; justify-content: space-between; align-items: center;
+        }
+        .ai-btn:hover:not(:disabled) { background: #ff3300; color: #000; box-shadow: 0 0 15px rgba(255, 51, 0, 0.5); }
+        .ai-btn:disabled { opacity: 0.5; cursor: not-allowed; border-color: #555; color: #555; }
+        
+        .ai-response-box {
+            background: rgba(10, 0, 0, 0.6); border-left: 2px solid #ff3300;
+            padding: 15px; font-size: 13px; color: #ddd; line-height: 1.6;
+            animation: fadeIn 0.5s ease;
+        }
+        .ai-title { color: #ff3300; font-size: 11px; font-weight: bold; margin-bottom: 5px; letter-spacing: 2px; }
+
+        @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+
+        .stats-section::-webkit-scrollbar { width: 4px; }
+        .stats-section::-webkit-scrollbar-track { background: transparent; }
+        .stats-section::-webkit-scrollbar-thumb { background: #005555; }
+
+        .back-btn {
+            background: transparent; border: 1px solid rgba(255,255,255,0.3); color: #aaa;
+            padding: 8px 20px; cursor: pointer; margin-bottom: 0; border-radius: 20px; transition: 0.3s;
+        }
+        .back-btn:hover { border-color: #00ffff; color: #00ffff; background: rgba(0,255,255,0.1); }
+
+        /* 时间轴 */
+        .timeline-container {
+            position: relative; width: 100%; background: rgba(10, 20, 30, 0.6); 
+            border-top: 1px solid rgba(0, 255, 255, 0.3); border-radius: 4px;
+            padding: 15px; box-sizing: border-box; display: flex; flex-direction: column; gap: 5px;
+            flex-shrink: 0; margin-top: auto; 
+        }
+        .current-date { color: #00ffff; font-size: 20px; font-weight: bold; font-family: 'Consolas', monospace; }
+        .time-slider { width: 100%; accent-color: #00ffff; cursor: pointer; }
+
+        #loader {
+            position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
+            color: #00ffff; font-size: 16px; text-align: center; pointer-events: none;
+            background: rgba(0,10,20,0.9); padding: 30px; border: 1px solid #00ffff; 
+            box-shadow: 0 0 30px rgba(0,255,255,0.2); z-index: 100;
+        }
+        
+        .legend-container {
+            position: absolute; bottom: 10px; right: 10px; 
+            background: rgba(0,0,0,0.8); padding: 10px; border-radius: 4px; border: 1px solid rgba(255,255,255,0.1);
+            display: flex; flex-direction: column; gap: 5px; pointer-events: none;
+        }
+        .legend-bar {
+            width: 150px; height: 10px; background: linear-gradient(to right, #f7fbff, #08306b); margin-bottom: 2px;
+        }
+        .legend-labels { display: flex; justify-content: space-between; font-size: 10px; color: #aaa; }
+    </style>
+    
+    <script type="importmap">
+        {
+            "imports": {
+                "vue": "https://unpkg.com/vue@3/dist/vue.esm-browser.js",
+                "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+                "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/",
+                "d3-geo": "https://cdn.jsdelivr.net/npm/d3-geo@3.1.0/+esm",
+                "d3-selection": "https://cdn.jsdelivr.net/npm/d3-selection@3.0.0/+esm",
+                "d3-scale": "https://cdn.jsdelivr.net/npm/d3-scale@4.0.2/+esm",
+                "d3-scale-chromatic": "https://cdn.jsdelivr.net/npm/d3-scale-chromatic@3.0.0/+esm",
+                "@supabase/supabase-js": "https://esm.sh/@supabase/supabase-js@2"
+            }
+        }
+    </script>
+</head>
+<body>
+    
+    <div id="canvas-container"></div>
+
+    <div id="app">
+        
+        <div id="loader" v-if="loading">
+            系统初始化中...<br>
+            <span style="font-size:12px; color:#aaa">正在建立全球数据链路...</span>
+            <div style="margin-top:10px; color:#00aaaa">{{ statusText }}</div>
+        </div>
+
+        <div id="ui-layer">
+            <header>
+                <div class="subtitle">GLOBAL INTELLIGENCE SYSTEM</div>
+                <h1>全球态势感知终端 </h1>
+            </header>
+
+            <div class="preview-panel" :class="{ active: showPreview && !detailMode }">
+                <div style="font-size:20px; color:#00ffff; margin-bottom:5px;">{{ selectedCountryName }}</div>
+                <div style="color:#aaa; font-size:12px; margin-bottom:15px">ISO: <span>{{ selectedIso }}</span></div>
+                <div style="min-height: 50px;">点击地球查看概览</div>
+                <button style="width:100%; padding:10px; background:rgba(0,255,255,0.2); border:1px solid #00ffff; color:#00ffff; cursor:pointer; margin-top:10px;" 
+                        @click="enterDetailMode">进入指挥视图 >></button>
+            </div>
+
+            <div class="detail-panel" :class="{ active: detailMode }">
+                <div class="detail-header">
+                    <div>
+                        <h2 class="country-title">{{ selectedCountryName }}</h2>
+                        <div class="country-meta">
+                            ISO: <span>{{ selectedIso }}</span> | 
+                            DATE: <span>{{ currentDate }}</span>
+                        </div>
+                    </div>
+                    <button class="back-btn" @click="exitDetailMode">← 返回地球视图</button>
+                </div>
+                
+                <div class="content-layout">
+                    <div class="map-section">
+                        <div class="map-controls">
+                            <button v-for="(config, key) in metricConfig" :key="key"
+                                    class="map-btn" :class="{ active: currentMetric === key }"
+                                    @click="setMapMetric(key)">
+                                {{ config.label }}
+                            </button>
+                        </div>
+                        
+                        <div id="d3-map-wrapper"></div>
+                        
+                        <div class="map-tooltip" v-if="mapTooltip.show" :style="{ left: mapTooltip.x + 'px', bottom: mapTooltip.y + 'px' }">
+                            {{ mapTooltip.text }}
+                        </div>
+
+                        <div class="legend-container">
+                            <div class="legend-labels" style="margin-bottom:2px;">
+                                <span style="color:#f7fbff; font-weight:bold;">Top 1 (最好)</span>
+                                <span style="color:#4292c6; font-weight:bold;">Last (最差)</span>
+                            </div>
+                            <div class="legend-bar"></div>
+                            <div style="font-size:10px; color:#888; text-align:center;">颜色越深排名越靠后 | 灰色无数据</div>
+                        </div>
+                    </div>
+
+                    <div class="stats-section">
+                        <div v-if="!countryData" style="color:#aaa; text-align:center; padding-top:50px;">
+                            该国本月无数据记录
+                        </div>
+                        <transition-group name="list" tag="div">
+                            <div v-for="item in computedMetrics" :key="item.key" 
+                                 class="metric-card" :style="{ borderLeft: '4px solid ' + item.color }">
+                                <div class="metric-header">
+                                    <span class="metric-label">{{ item.label }}</span>
+                                    <span class="metric-value">{{ item.value }}</span>
+                                </div>
+                                <div class="bar-bg">
+                                    <div class="bar-fill" :style="{ width: (100 - item.rankRatio * 100) + '%', background: item.color }"></div>
+                                </div>
+                                <div class="rank-text">全球排名 #{{ item.rank }} <span class="rank-highlight" :style="{ color: item.color }">(Top {{ item.topPercent }}%)</span></div>
+                            </div>
+                        </transition-group>
+
+                        <div class="ai-section" v-if="countryData">
+                            <button class="ai-btn" @click="askAI" :disabled="aiLoading">
+                                <span>{{ aiLoading ? 'AI 正在分析你的生存率...' : '生成旅游建议' }}</span>
+                                <span v-if="!aiLoading">>></span>
+                            </button>
+                            <div v-if="aiResponse" class="ai-response-box">
+                                <div class="ai-title">⚠️ AI RISK ADVISOR (Mean Mode):</div>
+                                <div class="ai-text">{{ aiResponse }}</div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="timeline-container">
+                    <div style="display:flex; justify-content:space-between; align-items:center;">
+                        <span style="color:#aaa; font-size:12px; text-transform:uppercase;">Timeline Control</span>
+                        <span class="current-date">{{ currentDate }}</span>
+                    </div>
+                    <input type="range" class="time-slider" min="0" :max="dateList.length - 1" v-model="dateIndex" @input="onDateInput" @change="onDateChange">
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script type="module">
+        import { createApp, ref, reactive, computed, onMounted } from 'vue';
+        import * as THREE from 'three';
+        import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+        import TWEEN from 'three/addons/libs/tween.module.js';
+        import { geoContains, geoCentroid, geoEquirectangular, geoPath } from 'd3-geo';
+        import { select } from 'd3-selection';
+        import { interpolateBlues } from 'd3-scale-chromatic'; 
+        import { createClient } from '@supabase/supabase-js';
+
+        // --- 1. 配置 & 字典 ---
+        
+        // 国家汉化字典
+        const COUNTRY_MAP = {
+            "United States of America": "美国", "China": "中国", "Russia": "俄罗斯", "Ukraine": "乌克兰",
+            "France": "法国", "United Kingdom": "英国", "Germany": "德国", "Japan": "日本",
+            "India": "印度", "South Korea": "韩国", "North Korea": "朝鲜", "Australia": "澳大利亚",
+            "Canada": "加拿大", "Brazil": "巴西", "Argentina": "阿根廷", "Mexico": "墨西哥",
+            "Italy": "意大利", "Spain": "西班牙", "Turkey": "土耳其", "Iran": "伊朗",
+            "Israel": "以色列", "Saudi Arabia": "沙特阿拉伯", "Egypt": "埃及", "South Africa": "南非",
+            "Indonesia": "印度尼西亚", "Vietnam": "越南", "Philippines": "菲律宾", "Thailand": "泰国",
+            "Malaysia": "马来西亚", "Pakistan": "巴基斯坦", "Afghanistan": "阿富汗", "Syria": "叙利亚",
+            "Iraq": "伊拉克", "Poland": "波兰", "Sweden": "瑞典", "Norway": "挪威",
+            "Finland": "芬兰", "Denmark": "丹麦", "Netherlands": "荷兰", "Belgium": "比利时",
+            "Switzerland": "瑞士", "Austria": "奥地利", "Greece": "希腊", "Portugal": "葡萄牙",
+            "Ireland": "爱尔兰", "New Zealand": "新西兰", "Singapore": "新加坡", "Myanmar": "缅甸",
+            "Bangladesh": "孟加拉国", "Colombia": "哥伦比亚", "Venezuela": "委内瑞拉", "Chile": "智利",
+            "Peru": "秘鲁", "Nigeria": "尼日利亚", "Ethiopia": "埃塞俄比亚", "Kenya": "肯尼亚",
+            "Kazakhstan": "哈萨克斯坦", "Uzbekistan": "乌兹别克斯坦", "Mongolia": "蒙古", "Belarus": "白俄罗斯",
+            "Hungary": "匈牙利", "Czechia": "捷克", "Romania": "罗马尼亚", "Slovakia": "斯洛伐克",
+            "Bulgaria": "保加利亚", "Serbia": "塞尔维亚", "Croatia": "克罗地亚", "Algeria": "阿尔及利亚",
+            "Morocco": "摩洛哥", "Libya": "利比亚", "Sudan": "苏丹", "Yemen": "也门", "Oman": "阿曼",
+            "United Arab Emirates": "阿联酋", "Qatar": "卡塔尔", "Kuwait": "科威特"
+        };
+
+        const getCNName = (enName) => COUNTRY_MAP[enName] || enName;
+
+        const DB_CONFIG = {
+            url: 'https://tqgakltkrgslobwjuvea.supabase.co',
+            key: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InRxZ2FrbHRrcmdzbG9id2p1dmVhIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjY4MDAyMDMsImV4cCI6MjA4MjM3NjIwM30.eeFY0fKmDt1SShUOLlZcslsmuiDu1bxE-hFiriItw6k',
+            tableName: 'bdcsg', 
+            joinColumn: 'country_code'
+        };
+
+        const AI_CONFIG = {
+            url: 'https://api2.qiandao.mom/v1/chat/completions',
+            key: 'sk-Bdw6Qy5BbWGE6wwnVBUQtbO7urKg5BhUb5TytfW8rDEeWW8N', // 注意：前端暴露Key有风险，仅供演示
+            model: 'gemini-3-pro-preview-h'
+        };
+
+        const VISUAL_CONFIG = {
+            earthRadius: 5,
+            offsetX: -32,
+        };
+
+        const METRIC_CONFIG = {
+            'conflict_score': { label: '冲突指数', max: 20, isPositive: false },
+            'disaster_score': { label: '灾害指数', max: 20, isPositive: false },
+            'safety_index':   { label: '安全综指', max: 100, isPositive: true },
+            'Crime Index':    { label: '犯罪指数', max: 100, isPositive: false },
+            'Safety Index':   { label: '人身安全', max: 100, isPositive: true },
+            'tone_mean':      { label: '舆论均值', max: 10,  isPositive: true },
+            'gdelt_event_risk_index': { label: 'GDELT风险', max: 10, isPositive: false },
+            'flu_total_detections': { label: '流感监测', max: 500, isPositive: false }
+        };
+
+        // --- 2. 类定义 ---
+
+        class D3MapClass {
+            constructor(containerId, geoData, tooltipCallback) {
+                this.container = document.getElementById(containerId);
+                this.geoData = geoData;
+                this.tooltipCallback = tooltipCallback;
+                this.width = this.container.clientWidth;
+                this.height = this.container.clientHeight;
+                
+                this.init();
+                window.addEventListener('resize', this.resize.bind(this));
+            }
+
+            init() {
+                this.svg = select(this.container).append('svg')
+                    .attr('width', '100%').attr('height', '100%');
+                this.g = this.svg.append('g');
+                this.arrowLayer = this.svg.append('g'); // 箭头层
+                this.resize();
+            }
+
+            resize() {
+                this.width = this.container.clientWidth;
+                this.height = this.container.clientHeight;
+                this.projection = geoEquirectangular().fitSize([this.width, this.height], this.geoData);
+                this.pathGenerator = geoPath().projection(this.projection);
+                this.svg.selectAll('path').attr('d', this.pathGenerator); 
+            }
+
+            render(globalData, selectedIso, metricKey) {
+                if (!globalData || !this.pathGenerator) return;
+
+                const config = METRIC_CONFIG[metricKey];
+                
+                const validItems = globalData
+                    .filter(d => d[metricKey] !== null && d[metricKey] !== undefined)
+                    .map(d => ({ iso: d[DB_CONFIG.joinColumn], val: d[metricKey] }));
+                
+                if (config.isPositive) validItems.sort((a, b) => b.val - a.val);
+                else validItems.sort((a, b) => a.val - b.val);
+
+                const rankMap = {};
+                const total = validItems.length;
+                validItems.forEach((item, index) => {
+                    const ratio = total > 1 ? index / (total - 1) : 0;
+                    rankMap[item.iso] = ratio;
+                });
+
+                const valueMap = {};
+                validItems.forEach(i => valueMap[i.iso] = i.val);
+
+                const paths = this.g.selectAll('path').data(this.geoData.features);
+                
+                paths.enter().append('path')
+                    .merge(paths)
+                    .attr('d', this.pathGenerator)
+                    .attr('fill', d => {
+                        const iso = d.properties.ISO_A3 || d.properties.ISO_A2 || d.properties.ADM0_A3;
+                        const ratio = rankMap[iso];
+                        if (ratio === undefined) return '#888888';
+                        return interpolateBlues(ratio);
+                    })
+                    .attr('stroke', '#333')
+                    .attr('stroke-width', 0.5)
+                    .on('mouseover', (e, d) => {
+                        const iso = d.properties.ISO_A3 || d.properties.ISO_A2;
+                        const val = valueMap[iso];
+                        const cnName = getCNName(d.properties.NAME); // 使用中文名
+                        this.tooltipCallback({ 
+                            show: true, 
+                            text: `${cnName}: ${val !== undefined ? val : 'N/A'}`,
+                            x: 10, y: 10 
+                        });
+                        select(e.target).attr('stroke', '#00ffff').attr('stroke-width', 1.5);
+                    })
+                    .on('mouseout', (e) => {
+                        this.tooltipCallback({ show: false });
+                        select(e.target).attr('stroke', '#333').attr('stroke-width', 0.5);
+                    });
+                
+                paths.exit().remove();
+
+                // --- 绘制红色箭头 ---
+                this.arrowLayer.selectAll('*').remove();
+                if (selectedIso) {
+                    const feature = this.geoData.features.find(f => {
+                        const props = f.properties;
+                        return (props.ISO_A3 === selectedIso || props.ISO_A2 === selectedIso || props.ADM0_A3 === selectedIso);
+                    });
+                    if (feature) {
+                        const centroid = this.pathGenerator.centroid(feature);
+                        // 绘制红色箭头
+                        this.arrowLayer.append('path')
+                            .attr('d', 'M0,0 L-7,-20 L7,-20 Z') // 加大箭头尺寸
+                            .attr('transform', `translate(${centroid[0]}, ${centroid[1] - 5})`) // 稍微调整位置
+                            .attr('fill', '#ff3300') // 亮红色
+                            .attr('stroke', '#ffffff') // 白色描边
+                            .attr('stroke-width', 1.5)
+                            .attr('class', 'indicator-arrow');
+                            
+                        // 添加同心圆动画效果
+                        this.arrowLayer.append('circle')
+                            .attr('cx', centroid[0])
+                            .attr('cy', centroid[1])
+                            .attr('r', 3)
+                            .attr('fill', '#ff3300');
+                    }
+                }
+            }
+        }
+
+        class EarthAppClass {
+            constructor(container, onSelectCallback) {
+                this.scene = new THREE.Scene();
+                this.camera = new THREE.PerspectiveCamera(45, window.innerWidth / window.innerHeight, 0.1, 1000);
+                this.renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+                this.renderer.setSize(window.innerWidth, window.innerHeight);
+                this.renderer.setPixelRatio(window.devicePixelRatio);
+                container.appendChild(this.renderer.domElement);
+
+                this.onSelectCallback = onSelectCallback;
+                this.earthGroup = new THREE.Group();
+                this.raycaster = new THREE.Raycaster();
+                this.mouse = new THREE.Vector2();
+                this.pointerMesh = null;
+                this.pointerFloat = 0;
+                this.countriesData = null;
+
+                this.initScene();
+                this.animate();
+
+                window.addEventListener('resize', () => {
+                    this.camera.aspect = window.innerWidth / window.innerHeight;
+                    this.camera.updateProjectionMatrix();
+                    this.renderer.setSize(window.innerWidth, window.innerHeight);
+                });
+                
+                window.addEventListener('pointerup', (e) => {
+                    this.mouse.x = (e.clientX / window.innerWidth) * 2 - 1;
+                    this.mouse.y = -(e.clientY / window.innerHeight) * 2 + 1;
+                    this.raycaster.setFromCamera(this.mouse, this.camera);
+                    const intersects = this.raycaster.intersectObject(this.earthMesh);
+                    
+                    if (intersects.length > 0) {
+                        const localP = intersects[0].point.clone();
+                        this.earthGroup.worldToLocal(localP);
+                        const lat = 90 - (Math.acos(localP.y / VISUAL_CONFIG.earthRadius) * 180 / Math.PI);
+                        let lon = (Math.atan2(localP.z, -localP.x) * 180 / Math.PI) - 180;
+                        if(lon < -180) lon+=360; if(lon > 180) lon-=360;
+                        
+                        if (this.countriesData) {
+                            const found = this.countriesData.features.find(f => geoContains(f, [lon, lat]));
+                            this.onSelectCallback(found || null);
+                        }
+                    }
+                });
+            }
+
+            initScene() {
+                this.camera.position.set(0, 0, 18);
+                this.controls = new OrbitControls(this.camera, this.renderer.domElement);
+                this.controls.enableDamping = true;
+                this.controls.minDistance = 6.5;
+                this.controls.maxDistance = 50;
+
+                this.scene.add(new THREE.AmbientLight(0x404040, 1.5));
+                const sunLight = new THREE.DirectionalLight(0xffffff, 2.0);
+                sunLight.position.set(20, 10, 10);
+                this.scene.add(sunLight);
+
+                const loader = new THREE.TextureLoader();
+                const mat = new THREE.MeshStandardMaterial({
+                    map: loader.load('https://unpkg.com/three-globe/example/img/earth-blue-marble.jpg'),
+                    bumpMap: loader.load('https://unpkg.com/three-globe/example/img/earth-topology.png'),
+                    bumpScale: 0.05, roughness: 0.6, metalness: 0.1
+                });
+                this.earthMesh = new THREE.Mesh(new THREE.SphereGeometry(VISUAL_CONFIG.earthRadius, 64, 64), mat);
+                this.earthGroup.add(this.earthMesh);
+
+                const atmoMat = new THREE.ShaderMaterial({
+                    vertexShader: `varying vec3 vNormal; void main() { vNormal = normalize(normalMatrix * normal); gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`,
+                    fragmentShader: `varying vec3 vNormal; void main() { float i = pow(0.6 - dot(vNormal, vec3(0,0,1)), 4.0); gl_FragColor = vec4(0.2, 0.6, 1.0, 1.0) * i; }`,
+                    blending: THREE.AdditiveBlending, side: THREE.BackSide, transparent: true
+                });
+                this.earthGroup.add(new THREE.Mesh(new THREE.SphereGeometry(VISUAL_CONFIG.earthRadius + 0.25, 64, 64), atmoMat));
+                
+                const geom = new THREE.BufferGeometry();
+                const pos = [];
+                for(let i=0; i<4000; i++) pos.push((Math.random()-0.5)*1000, (Math.random()-0.5)*1000, (Math.random()-0.5)*1000);
+                geom.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+                this.scene.add(new THREE.Points(geom, new THREE.PointsMaterial({ size: 0.8, color: 0xffffff, opacity: 0.6, transparent: true })));
+
+                // 指针改为红色
+                const pGeom = new THREE.ConeGeometry(0.2, 0.8, 16);
+                pGeom.rotateX(Math.PI / 2);
+                this.pointerMesh = new THREE.Mesh(pGeom, new THREE.MeshBasicMaterial({ color: 0xff3300 })); 
+                this.pointerMesh.visible = false;
+                this.earthGroup.add(this.pointerMesh);
+
+                this.scene.add(this.earthGroup);
+            }
+
+            addGeoData(data) {
+                this.countriesData = data;
+                const lineMat = new THREE.LineBasicMaterial({ color: 0x444444, transparent: true, opacity: 0.3 });
+                const points = [];
+                const addPoly = (poly) => {
+                    for(let i=0; i<poly.length-1; i++) {
+                        const p1 = this.latLonToVec3(poly[i][1], poly[i][0], VISUAL_CONFIG.earthRadius + 0.01);
+                        const p2 = this.latLonToVec3(poly[i+1][1], poly[i+1][0], VISUAL_CONFIG.earthRadius + 0.01);
+                        points.push(p1.x, p1.y, p1.z, p2.x, p2.y, p2.z);
+                    }
+                };
+                data.features.forEach(f => {
+                    if(f.geometry.type === 'Polygon') f.geometry.coordinates.forEach(addPoly);
+                    else if(f.geometry.type === 'MultiPolygon') f.geometry.coordinates.forEach(m => m.forEach(addPoly));
+                });
+                const geom = new THREE.BufferGeometry();
+                geom.setAttribute('position', new THREE.Float32BufferAttribute(points, 3));
+                this.earthGroup.add(new THREE.LineSegments(geom, lineMat));
+            }
+
+            latLonToVec3(lat, lon, r) {
+                const phi = (90 - lat) * (Math.PI / 180);
+                const theta = (lon + 180) * (Math.PI / 180);
+                return new THREE.Vector3(-(r * Math.sin(phi) * Math.cos(theta)), r * Math.cos(phi), r * Math.sin(phi) * Math.sin(theta));
+            }
+
+            moveToDetail(feature) {
+                const centroid = geoCentroid(feature);
+                const rY = -centroid[0] * (Math.PI / 180) - (Math.PI / 2);
+                const rX = centroid[1] * (Math.PI / 180);
+
+                new TWEEN.Tween(this.earthGroup.position).to({ x: VISUAL_CONFIG.offsetX }, 1000).easing(TWEEN.Easing.Cubic.InOut).start();
+                new TWEEN.Tween(this.earthGroup.rotation).to({ x: rX, y: rY }, 1000).easing(TWEEN.Easing.Cubic.InOut).start();
+                new TWEEN.Tween(this.camera.position).to({ z: 12 }, 1000).easing(TWEEN.Easing.Cubic.InOut).start();
+                new TWEEN.Tween(this.controls.target).to({ x: VISUAL_CONFIG.offsetX }, 1000).easing(TWEEN.Easing.Cubic.InOut).start();
+                
+                const pos = this.latLonToVec3(centroid[1], centroid[0], VISUAL_CONFIG.earthRadius + 0.5);
+                this.pointerMesh.position.copy(pos);
+                this.pointerMesh.lookAt(new THREE.Vector3(0,0,0));
+                this.pointerMesh.visible = true;
+            }
+
+            resetView() {
+                new TWEEN.Tween(this.earthGroup.position).to({ x: 0 }, 1000).easing(TWEEN.Easing.Cubic.Out).start();
+                new TWEEN.Tween(this.controls.target).to({ x: 0 }, 1000).easing(TWEEN.Easing.Cubic.Out).start();
+                new TWEEN.Tween(this.camera.position).to({ z: 18 }, 1000).easing(TWEEN.Easing.Cubic.Out).start();
+                new TWEEN.Tween(this.earthGroup.rotation).to({ x: 0 }, 1000).start();
+                this.pointerMesh.visible = false;
+            }
+
+            animate() {
+                requestAnimationFrame(this.animate.bind(this));
+                this.controls.update();
+                TWEEN.update();
+                if (this.pointerMesh && this.pointerMesh.visible) {
+                    this.pointerFloat += 0.08;
+                    this.pointerMesh.translateZ(Math.sin(this.pointerFloat) * 0.004);
+                }
+                this.renderer.render(this.scene, this.camera);
+            }
+        }
+
+        // --- 3. Vue 应用挂载 ---
+        
+        createApp({
+            setup() {
+                // Vue 状态定义
+                const loading = ref(true);
+                const statusText = ref('连接中...');
+                const detailMode = ref(false);
+                const showPreview = ref(false);
+                
+                const selectedIso = ref('--');
+                const selectedCountryName = ref('Country');
+                const selectedFeature = ref(null); 
+                
+                const globalData = ref([]);
+                const countryData = ref(null);
+                const currentMetric = ref('conflict_score');
+                const mapTooltip = reactive({ show: false, text: '', x: 0, y: 0 });
+
+                // AI State
+                const aiLoading = ref(false);
+                const aiResponse = ref('');
+
+                // 日期逻辑
+                const dateList = [];
+                const startD = new Date(2022, 0, 1);
+                const endD = new Date(2025, 11, 1);
+                let curr = new Date(startD);
+                while(curr <= endD) {
+                    dateList.push(`${curr.getFullYear()}/${curr.getMonth() + 1}/1`);
+                    curr.setMonth(curr.getMonth() + 1);
+                }
+                const dateIndex = ref(0);
+                const currentDate = ref(dateList[0]);
+
+                const supabase = createClient(DB_CONFIG.url, DB_CONFIG.key);
+
+                // 计算属性
+                const computedMetrics = computed(() => {
+                    if (!countryData.value) return [];
+                    const result = [];
+                    for (const [key, config] of Object.entries(METRIC_CONFIG)) {
+                        const val = countryData.value[key];
+                        if (val !== undefined && val !== null) {
+                            const validValues = globalData.value.map(d => d[key]).filter(v => v !== null && v !== undefined);
+                            if (config.isPositive) validValues.sort((a,b) => b-a); else validValues.sort((a,b) => a-b);
+                            
+                            const rank = validValues.indexOf(val) + 1;
+                            const total = validValues.length;
+                            const rankRatio = total > 1 ? (rank - 1) / (total - 1) : 0;
+                            const topPercent = Math.round((rank / total) * 100);
+                            
+                            result.push({
+                                key, label: config.label, value: val, rank, rankRatio, topPercent,
+                                color: interpolateBlues(rankRatio)
+                            });
+                        }
+                    }
+                    return result;
+                });
+
+                // 数据获取
+                const fetchGlobalData = async () => {
+                    statusText.value = `同步数据: ${currentDate.value}...`;
+                    const { data, error } = await supabase.from(DB_CONFIG.tableName).select('*').eq('report_month', currentDate.value);
+                    if (error) { console.error(error); statusText.value = "数据同步失败"; }
+                    else {
+                        globalData.value = data || [];
+                        statusText.value = "就绪";
+                        updateCountryData();
+                        if (d3Renderer) d3Renderer.render(globalData.value, selectedIso.value, currentMetric.value);
+                    }
+                };
+
+                const updateCountryData = () => {
+                    if (selectedIso.value !== '--') {
+                        countryData.value = globalData.value.find(d => d[DB_CONFIG.joinColumn] === selectedIso.value) || null;
+                    }
+                };
+
+                // AI Request Function
+                const askAI = async () => {
+                    if(!countryData.value) return;
+                    aiLoading.value = true;
+                    aiResponse.value = '';
+
+                    // 准备发给AI的数据上下文
+                    const context = computedMetrics.value.map(m => `${m.label}: ${m.value}`).join(', ');
+
+                    try {
+                        const res = await fetch(AI_CONFIG.url, {
+                            method: 'POST',
+                            headers: {
+                                'Content-Type': 'application/json',
+                                'Authorization': `Bearer ${AI_CONFIG.key}`
+                            },
+                            body: JSON.stringify({
+                                model: AI_CONFIG.model,
+                                messages: [
+                                    {
+                                        role: "system",
+                                        content: "你是一个说话刻薄、幽默且带有嘲讽语气的AI旅游顾问。你的任务是根据提供的国家安全数据（如冲突指数、犯罪率等），给想去这个国家旅游的人写一段简短的建议（100字左右）。\n\n规则：\n1. 语气要Mean（刻薄），带点黑色幽默。\n2. 如果数据很差（冲突高、安全低），嘲讽游客是不是活腻了想去送死。\n3. 如果数据很好（很安全），嘲讽那里无聊透顶，或者嘲讽游客太胆小只敢去这种温室。\n4. 必须结合具体数据进行吐槽。\n5. 请用中文回答。"
+                                    },
+                                    {
+                                        role: "user",
+                                        content: `目标国家：${selectedCountryName.value}。\n当前月份：${currentDate.value}。\n各项指标数据如下：${context}。\n请给出你的毒舌建议。`
+                                    }
+                                ]
+                            })
+                        });
+
+                        const data = await res.json();
+                        if(data.choices && data.choices.length > 0) {
+                            aiResponse.value = data.choices[0].message.content;
+                        } else {
+                            aiResponse.value = "AI 被当地军阀切断了网线... (API返回错误)";
+                        }
+                    } catch (e) {
+                        console.error(e);
+                        aiResponse.value = "AI 拒绝连接：你的请求被防火墙拦截了。";
+                    } finally {
+                        aiLoading.value = false;
+                    }
+                };
+
+                const onDateInput = () => { currentDate.value = dateList[dateIndex.value]; };
+                const onDateChange = () => { fetchGlobalData(); };
+                const setMapMetric = (key) => {
+                    currentMetric.value = key;
+                    if (d3Renderer) d3Renderer.render(globalData.value, selectedIso.value, currentMetric.value);
+                };
+
+                const enterDetailMode = () => {
+                    if (!selectedFeature.value) return;
+                    detailMode.value = true;
+                    showPreview.value = false;
+                    aiResponse.value = ''; // Reset AI when entering
+                    if (earthApp) earthApp.moveToDetail(selectedFeature.value);
+                    setTimeout(() => {
+                         if(d3Renderer) {
+                             d3Renderer.resize();
+                             d3Renderer.render(globalData.value, selectedIso.value, currentMetric.value);
+                         }
+                    }, 100);
+                };
+
+                const exitDetailMode = () => {
+                    detailMode.value = false;
+                    aiResponse.value = ''; // Reset AI when exiting
+                    if (earthApp) earthApp.resetView();
+                };
+
+                let earthApp = null;
+                let d3Renderer = null;
+
+                onMounted(async () => {
+                    // 初始化 Three.js
+                    earthApp = new EarthAppClass(document.getElementById('canvas-container'), (feature) => {
+                        if (detailMode.value) return; 
+                        if (feature) {
+                            selectedFeature.value = feature;
+                            // 汉化处理
+                            selectedCountryName.value = getCNName(feature.properties.NAME);
+                            selectedIso.value = feature.properties.ISO_A3 || feature.properties.ISO_A2 || "UNK";
+                            showPreview.value = true;
+                            updateCountryData();
+                        } else {
+                            showPreview.value = false;
+                        }
+                    });
+
+                    try {
+                        const res = await fetch('https://cdn.jsdelivr.net/gh/nvkelso/natural-earth-vector@master/geojson/ne_110m_admin_0_countries.geojson');
+                        const geoData = await res.json();
+                        earthApp.addGeoData(geoData);
+                        d3Renderer = new D3MapClass('d3-map-wrapper', geoData, (tooltip) => { Object.assign(mapTooltip, tooltip); });
+                        loading.value = false;
+                        fetchGlobalData();
+                    } catch (e) {
+                        console.error(e);
+                        statusText.value = "地图加载失败";
+                    }
+                });
+
+                return {
+                    loading, statusText, detailMode, showPreview, selectedIso, selectedCountryName,
+                    currentDate, dateList, dateIndex, onDateInput, onDateChange,
+                    metricConfig: METRIC_CONFIG, currentMetric, setMapMetric, countryData, computedMetrics, mapTooltip,
+                    enterDetailMode, exitDetailMode,
+                    // AI Exports
+                    askAI, aiLoading, aiResponse
+                };
+            }
+        }).mount('#app');
+    </script>
+</body>
+</html>
