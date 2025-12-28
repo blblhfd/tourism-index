@@ -108,6 +108,24 @@
             margin-top: 10px; border-top: 1px solid rgba(255, 51, 0, 0.3);
             padding-top: 15px; display: flex; flex-direction: column; gap: 10px;
         }
+        
+        /* 人格选择器样式 */
+        .persona-selector { display: flex; gap: 5px; margin-bottom: 5px; }
+        .persona-btn {
+            flex: 1; background: rgba(0, 0, 0, 0.4); border: 1px solid #444;
+            color: #888; padding: 6px 0; font-size: 10px; cursor: pointer;
+            transition: 0.3s; text-align: center; font-family: 'Consolas', monospace;
+        }
+        .persona-btn:hover { border-color: #00ffff; color: #00ffff; }
+        
+        /* 选中状态：颜色区分 */
+        .persona-btn.active.mode-mean { border-color: #ff3300; color: #ff3300; background: rgba(40, 0, 0, 0.3); }
+        .persona-btn.active.mode-pro { border-color: #00aaaa; color: #00aaaa; background: rgba(0, 40, 40, 0.3); }
+        .persona-btn.active.mode-boss { border-color: #ffd700; color: #ffd700; background: rgba(40, 40, 0, 0.3); }
+
+        .random-btn { width: 30px; flex: none; font-weight: bold; background: linear-gradient(135deg, rgba(255,255,255,0.1), rgba(255,255,255,0.05)); }
+        .random-btn:hover { background: #fff; color: #000; }
+
         .ai-btn {
             background: rgba(40, 0, 0, 0.6); border: 1px solid #ff3300; color: #ff3300;
             padding: 12px; cursor: pointer; font-family: 'Consolas', monospace; text-transform: uppercase;
@@ -119,9 +137,17 @@
         .ai-response-box {
             background: rgba(10, 0, 0, 0.6); border-left: 2px solid #ff3300;
             padding: 15px; font-size: 13px; color: #ddd; line-height: 1.6;
-            animation: fadeIn 0.5s ease;
+            animation: fadeIn 0.5s ease; transition: border-color 0.3s;
         }
+        /* 响应框颜色随人格变化 */
+        .ai-response-box.mode-mean { border-left-color: #ff3300; }
+        .ai-response-box.mode-pro { border-left-color: #00aaaa; }
+        .ai-response-box.mode-boss { border-left-color: #ffd700; }
+
         .ai-title { color: #ff3300; font-size: 11px; font-weight: bold; margin-bottom: 5px; letter-spacing: 2px; }
+        .ai-title.mode-mean { color: #ff3300; }
+        .ai-title.mode-pro { color: #00aaaa; }
+        .ai-title.mode-boss { color: #ffd700; }
 
         @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
 
@@ -261,12 +287,33 @@
                         </transition-group>
 
                         <div class="ai-section" v-if="countryData">
+                            
+                            <div class="persona-selector">
+                                <div v-for="p in PERSONAS" :key="p.id" 
+                                     class="persona-btn" 
+                                     :class="[p.btnClass, { active: currentPersonaKey === p.id }]"
+                                     @click="setPersona(p.id)">
+                                    {{ p.label }}
+                                </div>
+                                <div class="persona-btn random-btn" @click="setRandomPersona" title="随机人格">
+                                    ?
+                                </div>
+                            </div>
+
                             <button class="ai-btn" @click="askAI" :disabled="aiLoading">
-                                <span>{{ aiLoading ? 'AI 正在分析你的生存率...' : '生成旅游建议' }}</span>
+                                <span v-if="aiLoading">AI 正在计算中...</span>
+                                <span v-else>
+                                    {{ currentPersonaKey === 'mean' ? '生成毒舌建议' : 
+                                       currentPersonaKey === 'pro' ? '获取专业简报' : 
+                                       '听听霸总怎么说' }}
+                                </span>
                                 <span v-if="!aiLoading">>></span>
                             </button>
-                            <div v-if="aiResponse" class="ai-response-box">
-                                <div class="ai-title">⚠️ AI RISK ADVISOR (Mean Mode):</div>
+
+                            <div v-if="aiResponse" class="ai-response-box" :class="currentPersonaConfig.btnClass">
+                                <div class="ai-title" :class="currentPersonaConfig.btnClass">
+                                    {{ currentPersonaConfig.title }}
+                                </div>
                                 <div class="ai-text">{{ aiResponse }}</div>
                             </div>
                         </div>
@@ -330,7 +377,7 @@
 
         const AI_CONFIG = {
             url: 'https://api2.qiandao.mom/v1/chat/completions',
-            key: 'sk-Bdw6Qy5BbWGE6wwnVBUQtbO7urKg5BhUb5TytfW8rDEeWW8N', // 注意：前端暴露Key有风险，仅供演示
+            key: 'sk-Bdw6Qy5BbWGE6wwnVBUQtbO7urKg5BhUb5TytfW8rDEeWW8N', 
             model: 'gemini-3-pro-preview-h'
         };
 
@@ -348,6 +395,31 @@
             'tone_mean':      { label: '舆论均值', max: 10,  isPositive: true },
             'gdelt_event_risk_index': { label: 'GDELT风险', max: 10, isPositive: false },
             'flu_total_detections': { label: '流感监测', max: 500, isPositive: false }
+        };
+
+        // --- AI Personas 配置 ---
+        const PERSONAS = {
+            mean: {
+                id: 'mean',
+                label: '毒舌模式',
+                systemPrompt: "你是一个说话刻薄、幽默且带有嘲讽语气的AI旅游顾问。你的任务是根据提供的国家安全数据（如冲突指数、犯罪率等），给想去这个国家旅游的人写一段简短的建议（100字左右）。\n\n规则：\n1. 语气要Mean（刻薄），带点黑色幽默。\n2. 如果数据很差（冲突高、安全低），嘲讽游客是不是活腻了想去送死。\n3. 如果数据很好（很安全），嘲讽那里无聊透顶，或者嘲讽游客太胆小只敢去这种温室。\n4. 必须结合具体数据进行吐槽。\n5. 请用中文回答。",
+                btnClass: 'mode-mean',
+                title: '⚠️ AI RISK ADVISOR (Mean Mode):'
+            },
+            pro: {
+                id: 'pro',
+                label: '专业模式',
+                systemPrompt: "你是一位资深且严谨的全球安全情报分析师。请根据提供的各项指标数据，客观、冷静地评估该国的旅行风险。请给出切实的避险建议、最佳出行时机或具体的安全注意事项。语气专业、不带情绪，简明扼要，直击重点（100字左右）。",
+                btnClass: 'mode-pro',
+                title: '🛡️ SECURITY BRIEFING (Pro Mode):'
+            },
+            boss: {
+                id: 'boss',
+                label: '霸总模式',
+                systemPrompt: "你是一个霸道总裁。你看着这些数据，语气傲慢、自信，但对用户（你口中的'小笨蛋'）有极强的保护欲。如果地方危险，霸气地命令用户不许去，说'你想让我担心死吗？'；如果安全，说'这片鱼塘我为你承包了'。用词简短有力，必须结合数据装酷（100字左右）。",
+                btnClass: 'mode-boss',
+                title: '💎 CEO EXCLUSIVE (Boss Mode):'
+            }
         };
 
         // --- 2. 类定义 ---
@@ -442,16 +514,14 @@
                     });
                     if (feature) {
                         const centroid = this.pathGenerator.centroid(feature);
-                        // 绘制红色箭头
                         this.arrowLayer.append('path')
-                            .attr('d', 'M0,0 L-7,-20 L7,-20 Z') // 加大箭头尺寸
-                            .attr('transform', `translate(${centroid[0]}, ${centroid[1] - 5})`) // 稍微调整位置
-                            .attr('fill', '#ff3300') // 亮红色
-                            .attr('stroke', '#ffffff') // 白色描边
+                            .attr('d', 'M0,0 L-7,-20 L7,-20 Z') 
+                            .attr('transform', `translate(${centroid[0]}, ${centroid[1] - 5})`)
+                            .attr('fill', '#ff3300')
+                            .attr('stroke', '#ffffff')
                             .attr('stroke-width', 1.5)
                             .attr('class', 'indicator-arrow');
                             
-                        // 添加同心圆动画效果
                         this.arrowLayer.append('circle')
                             .attr('cx', centroid[0])
                             .attr('cy', centroid[1])
@@ -637,6 +707,10 @@
                 // AI State
                 const aiLoading = ref(false);
                 const aiResponse = ref('');
+                const currentPersonaKey = ref('mean'); // 默认毒舌
+
+                // 计算当前选中人格的详细配置
+                const currentPersonaConfig = computed(() => PERSONAS[currentPersonaKey.value]);
 
                 // 日期逻辑
                 const dateList = [];
@@ -695,11 +769,24 @@
                     }
                 };
 
+                // AI Persona Methods
+                const setPersona = (key) => {
+                    currentPersonaKey.value = key;
+                };
+
+                const setRandomPersona = () => {
+                    const keys = Object.keys(PERSONAS);
+                    const randomKey = keys[Math.floor(Math.random() * keys.length)];
+                    currentPersonaKey.value = randomKey;
+                };
+
                 // AI Request Function
                 const askAI = async () => {
                     if(!countryData.value) return;
                     aiLoading.value = true;
                     aiResponse.value = '';
+
+                    const persona = currentPersonaConfig.value;
 
                     // 准备发给AI的数据上下文
                     const context = computedMetrics.value.map(m => `${m.label}: ${m.value}`).join(', ');
@@ -716,11 +803,11 @@
                                 messages: [
                                     {
                                         role: "system",
-                                        content: "你是一个说话刻薄、幽默且带有嘲讽语气的AI旅游顾问。你的任务是根据提供的国家安全数据（如冲突指数、犯罪率等），给想去这个国家旅游的人写一段简短的建议（100字左右）。\n\n规则：\n1. 语气要Mean（刻薄），带点黑色幽默。\n2. 如果数据很差（冲突高、安全低），嘲讽游客是不是活腻了想去送死。\n3. 如果数据很好（很安全），嘲讽那里无聊透顶，或者嘲讽游客太胆小只敢去这种温室。\n4. 必须结合具体数据进行吐槽。\n5. 请用中文回答。"
+                                        content: persona.systemPrompt
                                     },
                                     {
                                         role: "user",
-                                        content: `目标国家：${selectedCountryName.value}。\n当前月份：${currentDate.value}。\n各项指标数据如下：${context}。\n请给出你的毒舌建议。`
+                                        content: `目标国家：${selectedCountryName.value}。\n当前月份：${currentDate.value}。\n各项指标数据如下：${context}。\n请给出你的建议。`
                                     }
                                 ]
                             })
@@ -805,7 +892,8 @@
                     metricConfig: METRIC_CONFIG, currentMetric, setMapMetric, countryData, computedMetrics, mapTooltip,
                     enterDetailMode, exitDetailMode,
                     // AI Exports
-                    askAI, aiLoading, aiResponse
+                    askAI, aiLoading, aiResponse, 
+                    PERSONAS, currentPersonaKey, setPersona, setRandomPersona, currentPersonaConfig
                 };
             }
         }).mount('#app');
