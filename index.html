@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>全球态势感知 - BDCSG AI Edition</title>
+    <title>全球态势感知 - BDCSG AI Edition (Weighted)</title>
     <style>
         body { margin: 0; overflow: hidden; background-color: #000; font-family: 'Segoe UI', 'Microsoft YaHei', sans-serif; }
         
@@ -103,13 +103,47 @@
         .rank-text { font-size: 12px; color: #888; text-align: right; font-style: italic; }
         .rank-highlight { color: #fff; font-weight: bold; }
 
+        /* 总分大卡片样式 (已修复截断问题) */
+        .total-score-card {
+            background: linear-gradient(135deg, rgba(0,40,40,0.8), rgba(0,10,10,0.9));
+            border: 1px solid #00ffff;
+            padding: 20px;
+            border-radius: 8px;
+            margin-bottom: 10px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            box-shadow: 0 0 20px rgba(0, 255, 255, 0.1);
+            position: relative;
+            overflow: hidden;
+            min-height: 90px;
+        }
+        .total-score-card::before {
+            content: ''; position: absolute; top: 0; left: 0; width: 4px; height: 100%;
+            background: #00ffff; box-shadow: 0 0 10px #00ffff;
+        }
+        .score-left h3 { margin: 0; color: #00aaaa; font-size: 12px; letter-spacing: 1px; }
+        
+        .score-left .big-score { 
+            font-size: 48px;
+            font-weight: bold; 
+            color: #fff; 
+            font-family: 'Consolas', monospace; 
+            margin-top: 5px; 
+            line-height: 1.2; 
+            padding-top: 2px;
+            display: inline-block;
+        }
+        
+        .score-right { text-align: right; font-size: 12px; color: #888; }
+        .risk-level { font-weight: bold; padding: 2px 6px; border-radius: 2px; margin-left: 5px; }
+
         /* AI Section Styles */
         .ai-section {
             margin-top: 10px; border-top: 1px solid rgba(255, 51, 0, 0.3);
             padding-top: 15px; display: flex; flex-direction: column; gap: 10px;
         }
         
-        /* 人格选择器样式 */
         .persona-selector { display: flex; gap: 5px; margin-bottom: 5px; }
         .persona-btn {
             flex: 1; background: rgba(0, 0, 0, 0.4); border: 1px solid #444;
@@ -118,7 +152,6 @@
         }
         .persona-btn:hover { border-color: #00ffff; color: #00ffff; }
         
-        /* 选中状态：颜色区分 */
         .persona-btn.active.mode-mean { border-color: #ff3300; color: #ff3300; background: rgba(40, 0, 0, 0.3); }
         .persona-btn.active.mode-pro { border-color: #00aaaa; color: #00aaaa; background: rgba(0, 40, 40, 0.3); }
         .persona-btn.active.mode-boss { border-color: #ffd700; color: #ffd700; background: rgba(40, 40, 0, 0.3); }
@@ -139,7 +172,6 @@
             padding: 15px; font-size: 13px; color: #ddd; line-height: 1.6;
             animation: fadeIn 0.5s ease; transition: border-color 0.3s;
         }
-        /* 响应框颜色随人格变化 */
         .ai-response-box.mode-mean { border-left-color: #ff3300; }
         .ai-response-box.mode-pro { border-left-color: #00aaaa; }
         .ai-response-box.mode-boss { border-left-color: #ffd700; }
@@ -272,6 +304,20 @@
                         <div v-if="!countryData" style="color:#aaa; text-align:center; padding-top:50px;">
                             该国本月无数据记录
                         </div>
+                        
+                        <div v-if="countryData" class="total-score-card">
+                            <div class="score-left">
+                                <h3>BDCSG 综合风险指数 (0-100)</h3>
+                                <div class="big-score" :style="{ color: riskColor }">
+                                    {{ weightedRiskScore }}
+                                </div>
+                            </div>
+                            <div class="score-right">
+                                <div>风险评级: <span class="risk-level" :style="{ background: riskColor, color: '#000' }">{{ riskLevel }}</span></div>
+                                <div style="margin-top:5px; font-size:10px;">基于冲突、犯罪、舆情等7维加权模型</div>
+                            </div>
+                        </div>
+
                         <transition-group name="list" tag="div">
                             <div v-for="item in computedMetrics" :key="item.key" 
                                  class="metric-card" :style="{ borderLeft: '4px solid ' + item.color }">
@@ -338,12 +384,11 @@
         import TWEEN from 'three/addons/libs/tween.module.js';
         import { geoContains, geoCentroid, geoEquirectangular, geoPath } from 'd3-geo';
         import { select } from 'd3-selection';
-        import { interpolateBlues } from 'd3-scale-chromatic'; 
+        import { interpolateBlues, interpolateReds } from 'd3-scale-chromatic'; 
         import { createClient } from '@supabase/supabase-js';
 
         // --- 1. 配置 & 字典 ---
         
-        // 国家汉化字典
         const COUNTRY_MAP = {
             "United States of America": "美国", "China": "中国", "Russia": "俄罗斯", "Ukraine": "乌克兰",
             "France": "法国", "United Kingdom": "英国", "Germany": "德国", "Japan": "日本",
@@ -386,44 +431,52 @@
             offsetX: -32,
         };
 
+        // 包含权重的配置 (Weight Sum = 1.0)
+        // 核心逻辑：所有指标归一化为 0-100 的“风险值” (数值越高越危险)
         const METRIC_CONFIG = {
-            'conflict_score': { label: '冲突指数', max: 20, isPositive: false },
-            'disaster_score': { label: '灾害指数', max: 20, isPositive: false },
-            'safety_index':   { label: '安全综指', max: 100, isPositive: true },
-            'Crime Index':    { label: '犯罪指数', max: 100, isPositive: false },
-            'Safety Index':   { label: '人身安全', max: 100, isPositive: true },
-            'tone_mean':      { label: '舆论均值', max: 10,  isPositive: true },
-            'gdelt_event_risk_index': { label: 'GDELT风险', max: 10, isPositive: false },
-            'flu_total_detections': { label: '流感监测', max: 500, isPositive: false }
+            'conflict_score': { label: '冲突指数', max: 20, isPositive: false, weight: 0.35 },
+            'Safety Index':   { label: '安全综指', max: 100, isPositive: true, weight: 0.20 }, // 反向：越高越安全->越低越危险
+            'Crime Index':    { label: '犯罪指数', max: 100, isPositive: false, weight: 0.15 },
+            'gdelt_event_risk_index': { label: 'GDELT风险', max: 10, isPositive: false, weight: 0.15 },
+            'disaster_score': { label: '灾害指数', max: 20, isPositive: false, weight: 0.05 },
+            'tone_mean':      { label: '舆论均值', max: 10,  isPositive: true, weight: 0.05 }, // 反向：越高越好->越低越危险
+            'flu_total_detections': { label: '流感监测', max: 500, isPositive: false, weight: 0.05 }
         };
 
         // --- AI Personas 配置 ---
+        // 使用模板字符串(反引号)避免长文本换行导致的 SyntaxError
         const PERSONAS = {
             mean: {
                 id: 'mean',
                 label: '毒舌模式',
-                systemPrompt: "你是一个说话刻薄、幽默且带有嘲讽语气的AI旅游顾问。你的任务是根据提供的国家安全数据（如冲突指数、犯罪率等），给想去这个国家旅游的人写一段简短的建议（100字左右）。\n\n规则：\n1. 语气要Mean（刻薄），带点黑色幽默。\n2. 如果数据很差（冲突高、安全低），嘲讽游客是不是活腻了想去送死。\n3. 如果数据很好（很安全），嘲讽那里无聊透顶，或者嘲讽游客太胆小只敢去这种温室。\n4. 必须结合具体数据进行吐槽。\n5. 请用中文回答。",
+                systemPrompt: `你是一个说话刻薄、幽默且带有嘲讽语气的AI旅游顾问。你的任务是根据提供的国家安全数据（含综合风险评分），给想去这个国家旅游的人写一段简短的建议（100字左右）。
+规则：
+1. 语气要Mean（刻薄），带点黑色幽默。
+2. 重点参考【综合风险评分】(0-100，越高越危险)。
+3. 如果分高（危险），嘲讽游客是不是活腻了。
+4. 如果分低（安全），嘲讽那里无聊透顶。
+5. 请用中文回答。`,
                 btnClass: 'mode-mean',
                 title: '⚠️ AI RISK ADVISOR (Mean Mode):'
             },
             pro: {
                 id: 'pro',
                 label: '专业模式',
-                systemPrompt: "你是一位资深且严谨的全球安全情报分析师。请根据提供的各项指标数据，客观、冷静地评估该国的旅行风险。请给出切实的避险建议、最佳出行时机或具体的安全注意事项。语气专业、不带情绪，简明扼要，直击重点（100字左右）。",
+                systemPrompt: `你是一位资深且严谨的全球安全情报分析师。请根据提供的各项指标数据及【综合风险评分】，客观、冷静地评估该国的旅行风险。请给出切实的避险建议、最佳出行时机或具体的安全注意事项。语气专业、不带情绪，简明扼要，直击重点（100字左右）。`,
                 btnClass: 'mode-pro',
                 title: '🛡️ SECURITY BRIEFING (Pro Mode):'
             },
             boss: {
                 id: 'boss',
                 label: '霸总模式',
-                systemPrompt: "你是一个霸道总裁。你看着这些数据，语气傲慢、自信，但对用户（你口中的'小笨蛋'）有极强的保护欲。如果地方危险，霸气地命令用户不许去，说'你想让我担心死吗？'；如果安全，说'这片鱼塘我为你承包了'。用词简短有力，必须结合数据装酷（100字左右）。",
+                systemPrompt: `你是一个霸道总裁。你看着这些数据和风险评分，语气傲慢、自信，但对用户（你口中的'小笨蛋'）有极强的保护欲。如果风险分高，霸气地命令用户不许去；如果分低，说'这片鱼塘我为你承包了'。用词简短有力（100字左右）。`,
                 btnClass: 'mode-boss',
                 title: '💎 CEO EXCLUSIVE (Boss Mode):'
             }
         };
 
         // --- 2. 类定义 ---
-
+        
         class D3MapClass {
             constructor(containerId, geoData, tooltipCallback) {
                 this.container = document.getElementById(containerId);
@@ -431,19 +484,15 @@
                 this.tooltipCallback = tooltipCallback;
                 this.width = this.container.clientWidth;
                 this.height = this.container.clientHeight;
-                
                 this.init();
                 window.addEventListener('resize', this.resize.bind(this));
             }
-
             init() {
-                this.svg = select(this.container).append('svg')
-                    .attr('width', '100%').attr('height', '100%');
+                this.svg = select(this.container).append('svg').attr('width', '100%').attr('height', '100%');
                 this.g = this.svg.append('g');
-                this.arrowLayer = this.svg.append('g'); // 箭头层
+                this.arrowLayer = this.svg.append('g');
                 this.resize();
             }
-
             resize() {
                 this.width = this.container.clientWidth;
                 this.height = this.container.clientHeight;
@@ -451,82 +500,40 @@
                 this.pathGenerator = geoPath().projection(this.projection);
                 this.svg.selectAll('path').attr('d', this.pathGenerator); 
             }
-
             render(globalData, selectedIso, metricKey) {
                 if (!globalData || !this.pathGenerator) return;
-
                 const config = METRIC_CONFIG[metricKey];
-                
-                const validItems = globalData
-                    .filter(d => d[metricKey] !== null && d[metricKey] !== undefined)
-                    .map(d => ({ iso: d[DB_CONFIG.joinColumn], val: d[metricKey] }));
-                
-                if (config.isPositive) validItems.sort((a, b) => b.val - a.val);
-                else validItems.sort((a, b) => a.val - b.val);
-
-                const rankMap = {};
-                const total = validItems.length;
-                validItems.forEach((item, index) => {
-                    const ratio = total > 1 ? index / (total - 1) : 0;
-                    rankMap[item.iso] = ratio;
-                });
-
-                const valueMap = {};
-                validItems.forEach(i => valueMap[i.iso] = i.val);
-
+                const validItems = globalData.filter(d => d[metricKey] !== null && d[metricKey] !== undefined).map(d => ({ iso: d[DB_CONFIG.joinColumn], val: d[metricKey] }));
+                if (config.isPositive) validItems.sort((a, b) => b.val - a.val); else validItems.sort((a, b) => a.val - b.val);
+                const rankMap = {}; validItems.forEach((item, index) => { rankMap[item.iso] = validItems.length > 1 ? index / (validItems.length - 1) : 0; });
+                const valueMap = {}; validItems.forEach(i => valueMap[i.iso] = i.val);
                 const paths = this.g.selectAll('path').data(this.geoData.features);
-                
-                paths.enter().append('path')
-                    .merge(paths)
-                    .attr('d', this.pathGenerator)
+                paths.enter().append('path').merge(paths).attr('d', this.pathGenerator)
                     .attr('fill', d => {
                         const iso = d.properties.ISO_A3 || d.properties.ISO_A2 || d.properties.ADM0_A3;
                         const ratio = rankMap[iso];
                         if (ratio === undefined) return '#888888';
                         return interpolateBlues(ratio);
                     })
-                    .attr('stroke', '#333')
-                    .attr('stroke-width', 0.5)
+                    .attr('stroke', '#333').attr('stroke-width', 0.5)
                     .on('mouseover', (e, d) => {
                         const iso = d.properties.ISO_A3 || d.properties.ISO_A2;
                         const val = valueMap[iso];
-                        const cnName = getCNName(d.properties.NAME); // 使用中文名
-                        this.tooltipCallback({ 
-                            show: true, 
-                            text: `${cnName}: ${val !== undefined ? val : 'N/A'}`,
-                            x: 10, y: 10 
-                        });
+                        const cnName = getCNName(d.properties.NAME);
+                        let displayVal = val !== undefined ? val : 'N/A';
+                        if (typeof displayVal === 'number' && displayVal % 1 !== 0) displayVal = displayVal.toFixed(2);
+                        this.tooltipCallback({ show: true, text: `${cnName}: ${displayVal}`, x: 10, y: 10 });
                         select(e.target).attr('stroke', '#00ffff').attr('stroke-width', 1.5);
                     })
-                    .on('mouseout', (e) => {
-                        this.tooltipCallback({ show: false });
-                        select(e.target).attr('stroke', '#333').attr('stroke-width', 0.5);
-                    });
-                
+                    .on('mouseout', (e) => { this.tooltipCallback({ show: false }); select(e.target).attr('stroke', '#333').attr('stroke-width', 0.5); });
                 paths.exit().remove();
-
-                // --- 绘制红色箭头 ---
                 this.arrowLayer.selectAll('*').remove();
                 if (selectedIso) {
-                    const feature = this.geoData.features.find(f => {
-                        const props = f.properties;
-                        return (props.ISO_A3 === selectedIso || props.ISO_A2 === selectedIso || props.ADM0_A3 === selectedIso);
-                    });
+                    const feature = this.geoData.features.find(f => (f.properties.ISO_A3 === selectedIso || f.properties.ISO_A2 === selectedIso));
                     if (feature) {
                         const centroid = this.pathGenerator.centroid(feature);
-                        this.arrowLayer.append('path')
-                            .attr('d', 'M0,0 L-7,-20 L7,-20 Z') 
-                            .attr('transform', `translate(${centroid[0]}, ${centroid[1] - 5})`)
-                            .attr('fill', '#ff3300')
-                            .attr('stroke', '#ffffff')
-                            .attr('stroke-width', 1.5)
-                            .attr('class', 'indicator-arrow');
-                            
-                        this.arrowLayer.append('circle')
-                            .attr('cx', centroid[0])
-                            .attr('cy', centroid[1])
-                            .attr('r', 3)
-                            .attr('fill', '#ff3300');
+                        this.arrowLayer.append('path').attr('d', 'M0,0 L-7,-20 L7,-20 Z').attr('transform', `translate(${centroid[0]}, ${centroid[1] - 5})`).attr('fill', '#ff3300').attr('stroke', '#ffffff').attr('stroke-width', 1.5);
+                        this.arrowLayer.append('circle').attr('cx', centroid[0]).attr('cy', centroid[1]).attr('r', 3).attr('fill', '#ff3300');
                     }
                 }
             }
@@ -540,148 +547,126 @@
                 this.renderer.setSize(window.innerWidth, window.innerHeight);
                 this.renderer.setPixelRatio(window.devicePixelRatio);
                 container.appendChild(this.renderer.domElement);
-
                 this.onSelectCallback = onSelectCallback;
                 this.earthGroup = new THREE.Group();
                 this.raycaster = new THREE.Raycaster();
                 this.mouse = new THREE.Vector2();
                 this.pointerMesh = null;
                 this.pointerFloat = 0;
-                this.countriesData = null;
-
                 this.initScene();
                 this.animate();
-
-                window.addEventListener('resize', () => {
-                    this.camera.aspect = window.innerWidth / window.innerHeight;
-                    this.camera.updateProjectionMatrix();
-                    this.renderer.setSize(window.innerWidth, window.innerHeight);
+                window.addEventListener('resize', () => { 
+                    this.camera.aspect = window.innerWidth / window.innerHeight; 
+                    this.camera.updateProjectionMatrix(); 
+                    this.renderer.setSize(window.innerWidth, window.innerHeight); 
                 });
-                
                 window.addEventListener('pointerup', (e) => {
-                    this.mouse.x = (e.clientX / window.innerWidth) * 2 - 1;
+                    this.mouse.x = (e.clientX / window.innerWidth) * 2 - 1; 
                     this.mouse.y = -(e.clientY / window.innerHeight) * 2 + 1;
                     this.raycaster.setFromCamera(this.mouse, this.camera);
                     const intersects = this.raycaster.intersectObject(this.earthMesh);
-                    
                     if (intersects.length > 0) {
-                        const localP = intersects[0].point.clone();
+                        const localP = intersects[0].point.clone(); 
                         this.earthGroup.worldToLocal(localP);
                         const lat = 90 - (Math.acos(localP.y / VISUAL_CONFIG.earthRadius) * 180 / Math.PI);
                         let lon = (Math.atan2(localP.z, -localP.x) * 180 / Math.PI) - 180;
                         if(lon < -180) lon+=360; if(lon > 180) lon-=360;
-                        
-                        if (this.countriesData) {
-                            const found = this.countriesData.features.find(f => geoContains(f, [lon, lat]));
-                            this.onSelectCallback(found || null);
+                        if (this.countriesData) { 
+                            const found = this.countriesData.features.find(f => geoContains(f, [lon, lat])); 
+                            this.onSelectCallback(found || null); 
                         }
                     }
                 });
             }
-
             initScene() {
                 this.camera.position.set(0, 0, 18);
                 this.controls = new OrbitControls(this.camera, this.renderer.domElement);
-                this.controls.enableDamping = true;
-                this.controls.minDistance = 6.5;
+                this.controls.enableDamping = true; 
+                this.controls.minDistance = 6.5; 
                 this.controls.maxDistance = 50;
-
                 this.scene.add(new THREE.AmbientLight(0x404040, 1.5));
-                const sunLight = new THREE.DirectionalLight(0xffffff, 2.0);
-                sunLight.position.set(20, 10, 10);
+                const sunLight = new THREE.DirectionalLight(0xffffff, 2.0); 
+                sunLight.position.set(20, 10, 10); 
                 this.scene.add(sunLight);
-
                 const loader = new THREE.TextureLoader();
-                const mat = new THREE.MeshStandardMaterial({
-                    map: loader.load('https://unpkg.com/three-globe/example/img/earth-blue-marble.jpg'),
-                    bumpMap: loader.load('https://unpkg.com/three-globe/example/img/earth-topology.png'),
-                    bumpScale: 0.05, roughness: 0.6, metalness: 0.1
+                const mat = new THREE.MeshStandardMaterial({ 
+                    map: loader.load('https://unpkg.com/three-globe/example/img/earth-blue-marble.jpg'), 
+                    bumpMap: loader.load('https://unpkg.com/three-globe/example/img/earth-topology.png'), 
+                    bumpScale: 0.05, roughness: 0.6, metalness: 0.1 
                 });
-                this.earthMesh = new THREE.Mesh(new THREE.SphereGeometry(VISUAL_CONFIG.earthRadius, 64, 64), mat);
+                this.earthMesh = new THREE.Mesh(new THREE.SphereGeometry(VISUAL_CONFIG.earthRadius, 64, 64), mat); 
                 this.earthGroup.add(this.earthMesh);
-
-                const atmoMat = new THREE.ShaderMaterial({
-                    vertexShader: `varying vec3 vNormal; void main() { vNormal = normalize(normalMatrix * normal); gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`,
-                    fragmentShader: `varying vec3 vNormal; void main() { float i = pow(0.6 - dot(vNormal, vec3(0,0,1)), 4.0); gl_FragColor = vec4(0.2, 0.6, 1.0, 1.0) * i; }`,
-                    blending: THREE.AdditiveBlending, side: THREE.BackSide, transparent: true
+                const atmoMat = new THREE.ShaderMaterial({ 
+                    vertexShader: `varying vec3 vNormal; void main() { vNormal = normalize(normalMatrix * normal); gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`, 
+                    fragmentShader: `varying vec3 vNormal; void main() { float i = pow(0.6 - dot(vNormal, vec3(0,0,1)), 4.0); gl_FragColor = vec4(0.2, 0.6, 1.0, 1.0) * i; }`, 
+                    blending: THREE.AdditiveBlending, side: THREE.BackSide, transparent: true 
                 });
                 this.earthGroup.add(new THREE.Mesh(new THREE.SphereGeometry(VISUAL_CONFIG.earthRadius + 0.25, 64, 64), atmoMat));
-                
-                const geom = new THREE.BufferGeometry();
-                const pos = [];
-                for(let i=0; i<4000; i++) pos.push((Math.random()-0.5)*1000, (Math.random()-0.5)*1000, (Math.random()-0.5)*1000);
-                geom.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+                const geom = new THREE.BufferGeometry(); 
+                const pos = []; 
+                for(let i=0; i<4000; i++) pos.push((Math.random()-0.5)*1000, (Math.random()-0.5)*1000, (Math.random()-0.5)*1000); 
+                geom.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3)); 
                 this.scene.add(new THREE.Points(geom, new THREE.PointsMaterial({ size: 0.8, color: 0xffffff, opacity: 0.6, transparent: true })));
-
-                // 指针改为红色
-                const pGeom = new THREE.ConeGeometry(0.2, 0.8, 16);
+                const pGeom = new THREE.ConeGeometry(0.2, 0.8, 16); 
                 pGeom.rotateX(Math.PI / 2);
                 this.pointerMesh = new THREE.Mesh(pGeom, new THREE.MeshBasicMaterial({ color: 0xff3300 })); 
-                this.pointerMesh.visible = false;
+                this.pointerMesh.visible = false; 
                 this.earthGroup.add(this.pointerMesh);
-
                 this.scene.add(this.earthGroup);
             }
-
             addGeoData(data) {
                 this.countriesData = data;
                 const lineMat = new THREE.LineBasicMaterial({ color: 0x444444, transparent: true, opacity: 0.3 });
                 const points = [];
-                const addPoly = (poly) => {
-                    for(let i=0; i<poly.length-1; i++) {
-                        const p1 = this.latLonToVec3(poly[i][1], poly[i][0], VISUAL_CONFIG.earthRadius + 0.01);
-                        const p2 = this.latLonToVec3(poly[i+1][1], poly[i+1][0], VISUAL_CONFIG.earthRadius + 0.01);
-                        points.push(p1.x, p1.y, p1.z, p2.x, p2.y, p2.z);
-                    }
+                const addPoly = (poly) => { 
+                    for(let i=0; i<poly.length-1; i++) { 
+                        const p1 = this.latLonToVec3(poly[i][1], poly[i][0], VISUAL_CONFIG.earthRadius + 0.01); 
+                        const p2 = this.latLonToVec3(poly[i+1][1], poly[i+1][0], VISUAL_CONFIG.earthRadius + 0.01); 
+                        points.push(p1.x, p1.y, p1.z, p2.x, p2.y, p2.z); 
+                    } 
                 };
-                data.features.forEach(f => {
-                    if(f.geometry.type === 'Polygon') f.geometry.coordinates.forEach(addPoly);
-                    else if(f.geometry.type === 'MultiPolygon') f.geometry.coordinates.forEach(m => m.forEach(addPoly));
+                data.features.forEach(f => { 
+                    if(f.geometry.type === 'Polygon') f.geometry.coordinates.forEach(addPoly); 
+                    else if(f.geometry.type === 'MultiPolygon') f.geometry.coordinates.forEach(m => m.forEach(addPoly)); 
                 });
-                const geom = new THREE.BufferGeometry();
-                geom.setAttribute('position', new THREE.Float32BufferAttribute(points, 3));
+                const geom = new THREE.BufferGeometry(); 
+                geom.setAttribute('position', new THREE.Float32BufferAttribute(points, 3)); 
                 this.earthGroup.add(new THREE.LineSegments(geom, lineMat));
             }
-
-            latLonToVec3(lat, lon, r) {
-                const phi = (90 - lat) * (Math.PI / 180);
-                const theta = (lon + 180) * (Math.PI / 180);
-                return new THREE.Vector3(-(r * Math.sin(phi) * Math.cos(theta)), r * Math.cos(phi), r * Math.sin(phi) * Math.sin(theta));
+            latLonToVec3(lat, lon, r) { 
+                const phi = (90 - lat) * (Math.PI / 180); 
+                const theta = (lon + 180) * (Math.PI / 180); 
+                return new THREE.Vector3(-(r * Math.sin(phi) * Math.cos(theta)), r * Math.cos(phi), r * Math.sin(phi) * Math.sin(theta)); 
             }
-
-            moveToDetail(feature) {
-                const centroid = geoCentroid(feature);
-                const rY = -centroid[0] * (Math.PI / 180) - (Math.PI / 2);
-                const rX = centroid[1] * (Math.PI / 180);
-
-                new TWEEN.Tween(this.earthGroup.position).to({ x: VISUAL_CONFIG.offsetX }, 1000).easing(TWEEN.Easing.Cubic.InOut).start();
-                new TWEEN.Tween(this.earthGroup.rotation).to({ x: rX, y: rY }, 1000).easing(TWEEN.Easing.Cubic.InOut).start();
-                new TWEEN.Tween(this.camera.position).to({ z: 12 }, 1000).easing(TWEEN.Easing.Cubic.InOut).start();
-                new TWEEN.Tween(this.controls.target).to({ x: VISUAL_CONFIG.offsetX }, 1000).easing(TWEEN.Easing.Cubic.InOut).start();
-                
-                const pos = this.latLonToVec3(centroid[1], centroid[0], VISUAL_CONFIG.earthRadius + 0.5);
-                this.pointerMesh.position.copy(pos);
-                this.pointerMesh.lookAt(new THREE.Vector3(0,0,0));
-                this.pointerMesh.visible = true;
+            moveToDetail(feature) { 
+                const centroid = geoCentroid(feature); 
+                const rY = -centroid[0] * (Math.PI / 180) - (Math.PI / 2); 
+                const rX = centroid[1] * (Math.PI / 180); 
+                new TWEEN.Tween(this.earthGroup.position).to({ x: VISUAL_CONFIG.offsetX }, 1000).easing(TWEEN.Easing.Cubic.InOut).start(); 
+                new TWEEN.Tween(this.earthGroup.rotation).to({ x: rX, y: rY }, 1000).easing(TWEEN.Easing.Cubic.InOut).start(); 
+                new TWEEN.Tween(this.camera.position).to({ z: 12 }, 1000).easing(TWEEN.Easing.Cubic.InOut).start(); 
+                new TWEEN.Tween(this.controls.target).to({ x: VISUAL_CONFIG.offsetX }, 1000).easing(TWEEN.Easing.Cubic.InOut).start(); 
+                const pos = this.latLonToVec3(centroid[1], centroid[0], VISUAL_CONFIG.earthRadius + 0.5); 
+                this.pointerMesh.position.copy(pos); 
+                this.pointerMesh.lookAt(new THREE.Vector3(0,0,0)); 
+                this.pointerMesh.visible = true; 
             }
-
-            resetView() {
-                new TWEEN.Tween(this.earthGroup.position).to({ x: 0 }, 1000).easing(TWEEN.Easing.Cubic.Out).start();
-                new TWEEN.Tween(this.controls.target).to({ x: 0 }, 1000).easing(TWEEN.Easing.Cubic.Out).start();
-                new TWEEN.Tween(this.camera.position).to({ z: 18 }, 1000).easing(TWEEN.Easing.Cubic.Out).start();
-                new TWEEN.Tween(this.earthGroup.rotation).to({ x: 0 }, 1000).start();
-                this.pointerMesh.visible = false;
+            resetView() { 
+                new TWEEN.Tween(this.earthGroup.position).to({ x: 0 }, 1000).easing(TWEEN.Easing.Cubic.Out).start(); 
+                new TWEEN.Tween(this.controls.target).to({ x: 0 }, 1000).easing(TWEEN.Easing.Cubic.Out).start(); 
+                new TWEEN.Tween(this.camera.position).to({ z: 18 }, 1000).easing(TWEEN.Easing.Cubic.Out).start(); 
+                new TWEEN.Tween(this.earthGroup.rotation).to({ x: 0 }, 1000).start(); 
+                this.pointerMesh.visible = false; 
             }
-
-            animate() {
-                requestAnimationFrame(this.animate.bind(this));
-                this.controls.update();
-                TWEEN.update();
-                if (this.pointerMesh && this.pointerMesh.visible) {
-                    this.pointerFloat += 0.08;
-                    this.pointerMesh.translateZ(Math.sin(this.pointerFloat) * 0.004);
-                }
-                this.renderer.render(this.scene, this.camera);
+            animate() { 
+                requestAnimationFrame(this.animate.bind(this)); 
+                this.controls.update(); 
+                TWEEN.update(); 
+                if (this.pointerMesh && this.pointerMesh.visible) { 
+                    this.pointerFloat += 0.08; 
+                    this.pointerMesh.translateZ(Math.sin(this.pointerFloat) * 0.004); 
+                } 
+                this.renderer.render(this.scene, this.camera); 
             }
         }
 
@@ -689,7 +674,7 @@
         
         createApp({
             setup() {
-                // Vue 状态定义
+                // Vue 状态
                 const loading = ref(true);
                 const statusText = ref('连接中...');
                 const detailMode = ref(false);
@@ -707,26 +692,66 @@
                 // AI State
                 const aiLoading = ref(false);
                 const aiResponse = ref('');
-                const currentPersonaKey = ref('mean'); // 默认毒舌
-
-                // 计算当前选中人格的详细配置
+                const currentPersonaKey = ref('mean');
                 const currentPersonaConfig = computed(() => PERSONAS[currentPersonaKey.value]);
 
-                // 日期逻辑
+                // 日期
                 const dateList = [];
                 const startD = new Date(2022, 0, 1);
                 const endD = new Date(2025, 11, 1);
                 let curr = new Date(startD);
-                while(curr <= endD) {
-                    dateList.push(`${curr.getFullYear()}/${curr.getMonth() + 1}/1`);
-                    curr.setMonth(curr.getMonth() + 1);
-                }
+                while(curr <= endD) { dateList.push(`${curr.getFullYear()}/${curr.getMonth() + 1}/1`); curr.setMonth(curr.getMonth() + 1); }
                 const dateIndex = ref(0);
                 const currentDate = ref(dateList[0]);
 
                 const supabase = createClient(DB_CONFIG.url, DB_CONFIG.key);
 
-                // 计算属性
+                // --- 核心计算 ---
+
+                // 1. 计算加权风险评分 (0-100)
+                const weightedRiskScore = computed(() => {
+                    if (!countryData.value) return 0;
+                    
+                    let totalScore = 0;
+                    
+                    for (const [key, config] of Object.entries(METRIC_CONFIG)) {
+                        let rawVal = countryData.value[key];
+                        if (rawVal === undefined || rawVal === null) rawVal = 0;
+
+                        // 归一化：转换为 0-100 的“风险值”
+                        let riskNorm = 0;
+                        if (config.isPositive) {
+                            riskNorm = ((config.max - Math.min(rawVal, config.max)) / config.max) * 100;
+                        } else {
+                            riskNorm = (Math.min(rawVal, config.max) / config.max) * 100;
+                        }
+
+                        totalScore += riskNorm * config.weight;
+                    }
+                    
+                    return Math.round(totalScore);
+                });
+
+                // 风险颜色和等级文字
+                const riskColor = computed(() => {
+                    const score = weightedRiskScore.value;
+                    if (score < 20) return '#00ff00';
+                    if (score < 40) return '#ccff00';
+                    if (score < 60) return '#ffff00';
+                    if (score < 80) return '#ff9900';
+                    return '#ff0000';
+                });
+
+                const riskLevel = computed(() => {
+                    const score = weightedRiskScore.value;
+                    if (score < 20) return '非常安全';
+                    if (score < 40) return '低风险';
+                    if (score < 60) return '中等风险';
+                    if (score < 80) return '高风险';
+                    return '极度危险';
+                });
+
+                // 2. 指标列表
                 const computedMetrics = computed(() => {
                     if (!countryData.value) return [];
                     const result = [];
@@ -741,8 +766,14 @@
                             const rankRatio = total > 1 ? (rank - 1) / (total - 1) : 0;
                             const topPercent = Math.round((rank / total) * 100);
                             
+                            // 格式化显示值：如果是小数，保留2位
+                            let displayValue = val;
+                            if (typeof val === 'number' && val % 1 !== 0) {
+                                displayValue = val.toFixed(2);
+                            }
+
                             result.push({
-                                key, label: config.label, value: val, rank, rankRatio, topPercent,
+                                key, label: config.label, value: displayValue, rank, rankRatio, topPercent,
                                 color: interpolateBlues(rankRatio)
                             });
                         }
@@ -770,61 +801,43 @@
                 };
 
                 // AI Persona Methods
-                const setPersona = (key) => {
-                    currentPersonaKey.value = key;
-                };
-
+                const setPersona = (key) => { currentPersonaKey.value = key; };
                 const setRandomPersona = () => {
                     const keys = Object.keys(PERSONAS);
-                    const randomKey = keys[Math.floor(Math.random() * keys.length)];
-                    currentPersonaKey.value = randomKey;
+                    currentPersonaKey.value = keys[Math.floor(Math.random() * keys.length)];
                 };
 
-                // AI Request Function
+                // AI Request
                 const askAI = async () => {
                     if(!countryData.value) return;
                     aiLoading.value = true;
                     aiResponse.value = '';
 
                     const persona = currentPersonaConfig.value;
-
-                    // 准备发给AI的数据上下文
                     const context = computedMetrics.value.map(m => `${m.label}: ${m.value}`).join(', ');
+                    
+                    // 将综合风险分也放入Prompt
+                    const riskContext = `综合风险评分(0-100, 越高越危险): ${weightedRiskScore.value} (${riskLevel.value})`;
 
                     try {
                         const res = await fetch(AI_CONFIG.url, {
                             method: 'POST',
-                            headers: {
-                                'Content-Type': 'application/json',
-                                'Authorization': `Bearer ${AI_CONFIG.key}`
-                            },
+                            headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${AI_CONFIG.key}` },
                             body: JSON.stringify({
                                 model: AI_CONFIG.model,
                                 messages: [
-                                    {
-                                        role: "system",
-                                        content: persona.systemPrompt
-                                    },
-                                    {
-                                        role: "user",
-                                        content: `目标国家：${selectedCountryName.value}。\n当前月份：${currentDate.value}。\n各项指标数据如下：${context}。\n请给出你的建议。`
-                                    }
+                                    { role: "system", content: persona.systemPrompt },
+                                    { role: "user", content: `目标国家：${selectedCountryName.value}。\n当前月份：${currentDate.value}。\n${riskContext}。\n详细指标：${context}。\n请给出建议。` }
                                 ]
                             })
                         });
 
                         const data = await res.json();
-                        if(data.choices && data.choices.length > 0) {
-                            aiResponse.value = data.choices[0].message.content;
-                        } else {
-                            aiResponse.value = "AI 被当地军阀切断了网线... (API返回错误)";
-                        }
+                        if(data.choices && data.choices.length > 0) aiResponse.value = data.choices[0].message.content;
+                        else aiResponse.value = "AI 被当地军阀切断了网线... (API返回错误)";
                     } catch (e) {
-                        console.error(e);
-                        aiResponse.value = "AI 拒绝连接：你的请求被防火墙拦截了。";
-                    } finally {
-                        aiLoading.value = false;
-                    }
+                        console.error(e); aiResponse.value = "AI 拒绝连接：你的请求被防火墙拦截了。";
+                    } finally { aiLoading.value = false; }
                 };
 
                 const onDateInput = () => { currentDate.value = dateList[dateIndex.value]; };
@@ -836,21 +849,13 @@
 
                 const enterDetailMode = () => {
                     if (!selectedFeature.value) return;
-                    detailMode.value = true;
-                    showPreview.value = false;
-                    aiResponse.value = ''; // Reset AI when entering
+                    detailMode.value = true; showPreview.value = false; aiResponse.value = '';
                     if (earthApp) earthApp.moveToDetail(selectedFeature.value);
-                    setTimeout(() => {
-                         if(d3Renderer) {
-                             d3Renderer.resize();
-                             d3Renderer.render(globalData.value, selectedIso.value, currentMetric.value);
-                         }
-                    }, 100);
+                    setTimeout(() => { if(d3Renderer) { d3Renderer.resize(); d3Renderer.render(globalData.value, selectedIso.value, currentMetric.value); } }, 100);
                 };
 
                 const exitDetailMode = () => {
-                    detailMode.value = false;
-                    aiResponse.value = ''; // Reset AI when exiting
+                    detailMode.value = false; aiResponse.value = '';
                     if (earthApp) earthApp.resetView();
                 };
 
@@ -858,19 +863,14 @@
                 let d3Renderer = null;
 
                 onMounted(async () => {
-                    // 初始化 Three.js
                     earthApp = new EarthAppClass(document.getElementById('canvas-container'), (feature) => {
                         if (detailMode.value) return; 
                         if (feature) {
                             selectedFeature.value = feature;
-                            // 汉化处理
                             selectedCountryName.value = getCNName(feature.properties.NAME);
                             selectedIso.value = feature.properties.ISO_A3 || feature.properties.ISO_A2 || "UNK";
-                            showPreview.value = true;
-                            updateCountryData();
-                        } else {
-                            showPreview.value = false;
-                        }
+                            showPreview.value = true; updateCountryData();
+                        } else { showPreview.value = false; }
                     });
 
                     try {
@@ -878,22 +878,17 @@
                         const geoData = await res.json();
                         earthApp.addGeoData(geoData);
                         d3Renderer = new D3MapClass('d3-map-wrapper', geoData, (tooltip) => { Object.assign(mapTooltip, tooltip); });
-                        loading.value = false;
-                        fetchGlobalData();
-                    } catch (e) {
-                        console.error(e);
-                        statusText.value = "地图加载失败";
-                    }
+                        loading.value = false; fetchGlobalData();
+                    } catch (e) { console.error(e); statusText.value = "地图加载失败"; }
                 });
 
                 return {
                     loading, statusText, detailMode, showPreview, selectedIso, selectedCountryName,
                     currentDate, dateList, dateIndex, onDateInput, onDateChange,
                     metricConfig: METRIC_CONFIG, currentMetric, setMapMetric, countryData, computedMetrics, mapTooltip,
-                    enterDetailMode, exitDetailMode,
-                    // AI Exports
-                    askAI, aiLoading, aiResponse, 
-                    PERSONAS, currentPersonaKey, setPersona, setRandomPersona, currentPersonaConfig
+                    enterDetailMode, exitDetailMode, askAI, aiLoading, aiResponse, 
+                    PERSONAS, currentPersonaKey, setPersona, setRandomPersona, currentPersonaConfig,
+                    weightedRiskScore, riskColor, riskLevel
                 };
             }
         }).mount('#app');
